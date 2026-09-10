@@ -12,16 +12,20 @@ export function createTarget(root: string, migration = 40): TargetPaths {
   mkdirSync(paths.stateDir, { recursive: true });
   const db = new Database(paths.dbPath);
   try {
-    db.exec(schema.ddl.join(";\n"));
-    for (const row of schema.migrations) {
-      const columns = Object.keys(row);
-      db.prepare(`INSERT INTO effect_sql_migrations (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).run(...Object.values(row));
-    }
-    // Unsupported versions are only used to exercise fail-closed validation.
-    if (!schemas[String(migration)]) {
-      db.prepare("DELETE FROM effect_sql_migrations WHERE migration_id = ?").run(migration);
-      db.prepare("UPDATE effect_sql_migrations SET migration_id = ? WHERE migration_id = 40").run(migration);
-    }
+    // Fixture setup is atomic; avoid a disk sync per table/index/migration row
+    // when exercising the complete historical schema on slower CI runners.
+    db.transaction(() => {
+      db.exec(schema.ddl.join(";\n"));
+      for (const row of schema.migrations) {
+        const columns = Object.keys(row);
+        db.prepare(`INSERT INTO effect_sql_migrations (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`).run(...Object.values(row));
+      }
+      // Unsupported versions are only used to exercise fail-closed validation.
+      if (!schemas[String(migration)]) {
+        db.prepare("DELETE FROM effect_sql_migrations WHERE migration_id = ?").run(migration);
+        db.prepare("UPDATE effect_sql_migrations SET migration_id = ? WHERE migration_id = 40").run(migration);
+      }
+    })();
   } finally { db.close(); }
   return paths;
 }
