@@ -26,7 +26,13 @@ async function waitForFrame(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const frame = tui.lastFrame() ?? "";
-    if (frame.includes(expected)) return frame;
+    if (frame.includes(expected)) {
+      // Ink writes the frame during commit, before useInput's passive effect
+      // refreshes its listener. Let that effect settle before tests send input.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const settledFrame = tui.lastFrame() ?? "";
+      if (settledFrame.includes(expected)) return settledFrame;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Timed out waiting for '${expected}'. Last frame:\n${tui.lastFrame() ?? "<none>"}`);
