@@ -1,0 +1,57 @@
+[
+  {
+    "migration": 40,
+    "commit": "076e9048dc57ab09b3692def050e12d690a1b027",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 41,
+    "commit": "11f051373e79b38fa16f3ec1af825f5164907c1b",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 42,
+    "commit": "3c75eb1132bb5d67cfa95ac6271ef68959f986c1",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 43,
+    "commit": "3b86ef941c218a000a2ea9920480f469b726f437",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 44,
+    "commit": "5392c9bb99c4be1f1c3fd78743df62885fd214dd",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 45,
+    "commit": "ba3cb0773859334fe9f75016295bb3893c9e6044",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 46,
+    "commit": "2971ec3209d7ef1b00d7ded70fe6342816b1539f",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 47,
+    "commit": "f6c04c552c203350705f9ab1e47773ea736af245",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 48,
+    "commit": "223ff4490f764a74ff911589e97b9bbcd595fee8",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 49,
+    "commit": "2d645df474f0af5e261edb56a79f7a2a9a2d442e",
+    "effect": "4.0.0-beta.103"
+  },
+  {
+    "migration": 50,
+    "commit": "b7b3ef1e6fcb5c22a9790d2578fe8af7ce396835",
+    "effect": "4.0.0-rc.112"
+  }
+]

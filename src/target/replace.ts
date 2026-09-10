@@ -16,7 +16,7 @@ import { deterministicUuid, isObject, stringValue } from "../core/util.js";
 import { safetyError, writeError } from "../core/errors.js";
 import type { TargetOverrides } from "./config.js";
 import { listImports, recordConsolidation, type LedgerRecord, type StoredLedgerRecord } from "./ledger.js";
-import { assertT3Closed, SUPPORTED_MIGRATION, validateTargetDatabase } from "./schema.js";
+import { assertT3Closed, validateTargetDatabase } from "./schema.js";
 import {
   IMPORTER_VERSION,
   MAX_SAFE_IMPORT_EVENTS,
@@ -310,7 +310,7 @@ export async function replaceConversations(selections: ReplaceSelection[], paths
             targetId: targetId(paths), source: planned.thread.source, sourceSessionId: planned.thread.sourceSessionId,
             sourceKey: planned.thread.sourceKey, sourceFingerprint: plan.conversation.fingerprint,
             projectId: planned.projectId, threadId: planned.threadId, importedAt: replacedAt,
-            importerVersion: IMPORTER_VERSION, migration: SUPPORTED_MIGRATION, firstSequence: first,
+            importerVersion: IMPORTER_VERSION, migration: schema.migration, firstSequence: first,
             lastSequence: last, resumable: plan.result.resumeTransferred, backupPath: backup!,
             warnings: plan.result.warnings, identitySeed: replacementIdentitySeed(planned.thread.sourceKey, old.threadId),
             currentSourceKey: planned.thread.sourceKey, ...(planned.thread.leafId ? { sourceLeafId: planned.thread.leafId } : {}),

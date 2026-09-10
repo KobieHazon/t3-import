@@ -2,7 +2,7 @@
 
 `t3-import` is an independent, local-only CLI for importing Codex and Claude Code conversation history into [T3 Code](https://github.com/pingdotgg/t3code). It writes canonical orchestration events while T3 is closed; T3 rebuilds its own projections on the next launch. The original provider session is bound so the current branch can resume when the source history is still available.
 
-The first compatibility profile is intentionally strict: **T3 migration 40 only**, Node.js 22 or newer, and local files only. Unknown T3 schemas fail closed.
+Compatibility is intentionally explicit: **T3 migrations 40–50**, Node.js 22 or newer, and local files only. Unknown T3 schemas fail closed.
 
 ## How it works
 
@@ -10,7 +10,7 @@ The first compatibility profile is intentionally strict: **T3 migration 40 only*
 
 To keep T3 startup bounded, imports preserve every message, turn boundary, plan, image, error or approval, context compaction, and resume binding while compacting repetitive activity telemetry. Context-window snapshots are omitted, and long turns retain the latest visible reasoning summary plus a representative significant tool activity. The importer rejects any write that would exceed T3's safe one-launch projection budget.
 
-With T3 Code closed, the importer validates the local migration-40 database and creates a verified backup. It then appends canonical events to `orchestration_events` and adds provider-session bindings for conversations that can be resumed. It does not modify T3's projection tables: T3 Code rebuilds them from the imported events the next time it starts. After a successful write, the importer also backs up and resets T3's rebuildable IndexedDB origin cache so stale task snapshots cannot hide newly imported history.
+With T3 Code closed, the importer validates the local database against the supported migration profiles and creates a verified backup. It then appends canonical events to `orchestration_events` and adds provider-session bindings for conversations that can be resumed. It does not modify T3's projection tables: T3 Code rebuilds them from the imported events the next time it starts. After a successful write, the importer also backs up and resets T3's rebuildable IndexedDB origin cache so stale task snapshots cannot hide newly imported history.
 
 After an initial import, `t3-import` can append newly settled Codex turns and newly settled turns from linear Claude conversations. Completed, interrupted, and failed turns are preserved; only genuinely active or indeterminate turns are ignored during synchronization. It verifies that the imported checkpoint is still an exact prefix, adopts exact turns already created by resuming through T3, and never replaces edited or deleted history. Claude sessions with multiple non-sidechain leaves after deterministic compaction and retry normalization are reported as conflicts rather than guessed.
 
@@ -128,4 +128,14 @@ npm run build
 npm pack
 ```
 
-The end-to-end fixture is deliberately local and uncommitted. To validate against a real nightly, copy a migration-40 database to an isolated T3 home, import a task there, and launch T3's server with that home. Never use the development validation flow against the live `~/.t3` database.
+Compatibility is validated against pinned historical T3 commits for every migration from 40 through 50, including nightly `v0.0.41-nightly.20260910.1473` (`b7b3ef1e6`). Earlier versions and unvalidated future migrations fail closed. The importer never upgrades a T3 database; T3 owns migrations, and existing imports can continue synchronizing after an upgrade within the supported range.
+
+`npm test` uses committed schemas generated from T3's actual migrations. The additional integration matrix runs the historical event decoders, projectors, and provider restoration services against synthetic databases:
+
+```text
+npm run test:compatibility
+```
+
+This requires Git, tar, Node.js 22.21.1 or newer, network access for isolated development dependencies, and a T3 checkout containing the pinned commits at `repos/t3code` (override with `T3_REFERENCE_REPO`). It prepares source snapshots under `artifacts/compatibility`, exercises both providers at all eleven migrations and every upgrade to 50, and writes a JSON result report. Provider processes are replaced with controlled test adapters; no paid provider work runs. The installed T3 application and live database are not used.
+
+See [compatibility validation](https://github.com/CarlosGtrz/t3-import/blob/main/docs/compatibility.md) for reference commits, fixture regeneration, and the exact validation boundary.

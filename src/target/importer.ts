@@ -27,7 +27,7 @@ import { canonicalPath, deterministicUuid, sha256, truncate } from "../core/util
 import { checkpointForThread } from "../core/checkpoint.js";
 import { safetyError, writeError } from "../core/errors.js";
 import { resolveProviderSelection, type TargetOverrides } from "./config.js";
-import { assertT3Closed, SUPPORTED_MIGRATION, validateTargetDatabase } from "./schema.js";
+import { assertT3Closed, validateTargetDatabase } from "./schema.js";
 import { recordImports, type LedgerRecord } from "./ledger.js";
 
 const EVENT_TYPES = [
@@ -78,7 +78,7 @@ export interface PlannedThread {
 }
 
 export const MAX_SAFE_IMPORT_EVENTS = 900;
-export const IMPORTER_VERSION = "0.3.2";
+export const IMPORTER_VERSION = "0.4.0";
 const MAX_LAST_ERROR_LENGTH = 500;
 
 function settledSession(turn: CanonicalThread["turns"][number]): { status: "ready" | "interrupted" | "error"; lastError: string | null } {
@@ -168,7 +168,9 @@ export interface ImportOptions extends TargetOverrides {
 
 export function projectionBacklog(db: Database.Database): { latestSequence: number; projectedSequence: number; backlog: number } {
   const latestSequence = Number((db.prepare("SELECT COALESCE(MAX(sequence), 0) value FROM orchestration_events").get() as { value: number }).value);
-  const projected = db.prepare("SELECT MIN(last_applied_sequence) value FROM projection_state").get() as { value: number | null };
+  // Newer T3 versions keep a separate attachment-cleanup retry cursor. It only
+  // advances at bootstrap, not for live events, and is not a read-model cursor.
+  const projected = db.prepare("SELECT MIN(last_applied_sequence) value FROM projection_state WHERE projector <> 'projection.attachment-cleanup'").get() as { value: number | null };
   const projectedSequence = projected.value ?? 0;
   return {
     latestSequence,
@@ -286,6 +288,17 @@ export function planThread(
       session: { threadId, status: "running", providerName: provider.providerName, providerInstanceId: provider.instanceId, runtimeMode: "full-access", activeTurnId: turn.id, lastError: null, updatedAt: turn.startedAt },
     }, { adapterKey: provider.adapterKey, providerTurnId: turn.id }));
 
+    // Bootstrap replays each projector independently. The turn projector sees
+    // the session projector's final state, so a non-streaming message can mark
+    // a turn completed before its terminal session event is read. Settle first;
+    // subsequent messages preserve interrupted/error states and their timestamps.
+    const settledAt = turn.completedAt ?? turn.assistant.at(-1)?.timestamp ?? turn.user.timestamp;
+    const settled = settledSession(turn);
+    events.push(event(seed, `turn.${turnNumber}.settled`, "thread", threadId, "thread.session-set", settledAt, "provider", {
+      threadId,
+      session: { threadId, status: settled.status, providerName: provider.providerName, providerInstanceId: provider.instanceId, runtimeMode: "full-access", activeTurnId: null, lastError: settled.lastError, updatedAt: settledAt },
+    }, { adapterKey: provider.adapterKey, providerTurnId: turn.id }));
+
     const timeline: Array<{ timestamp: string; sourceId: string; type: "message" | "activity" | "plan"; value: CanonicalMessage | CanonicalActivity | { sourceId: string; markdown: string; timestamp: string } }> = [
       ...turn.assistant.map((value) => ({ timestamp: value.timestamp, sourceId: value.sourceId, type: "message" as const, value })),
       ...turn.activities.map((value) => ({ timestamp: value.timestamp, sourceId: value.sourceId, type: "activity" as const, value })),
@@ -314,12 +327,7 @@ export function planThread(
         }, { adapterKey: provider.adapterKey, providerTurnId: turn.id, providerItemId: plan.sourceId }));
       }
     });
-    const settledAt = turn.completedAt ?? turn.assistant.at(-1)?.timestamp ?? turn.user.timestamp;
-    const settled = settledSession(turn);
-    events.push(event(seed, `turn.${turnNumber}.settled`, "thread", threadId, "thread.session-set", settledAt, "provider", {
-      threadId,
-      session: { threadId, status: settled.status, providerName: provider.providerName, providerInstanceId: provider.instanceId, runtimeMode: "full-access", activeTurnId: null, lastError: settled.lastError, updatedAt: settledAt },
-    }, { adapterKey: provider.adapterKey, providerTurnId: turn.id }));
+
   });
   return { thread, threadId, projectId, provider, events, assets, resumable, warnings, alreadyImported: false, fingerprint };
 }
@@ -548,7 +556,7 @@ export async function importConversations(
             sourceSessionId: plan.thread.sourceSessionId, sourceKey: plan.thread.sourceKey,
             sourceFingerprint: plan.fingerprint, projectId: plan.projectId, threadId: plan.threadId,
             importedAt: new Date().toISOString(), importerVersion: IMPORTER_VERSION,
-            migration: SUPPORTED_MIGRATION, firstSequence, lastSequence,
+            migration: schema.migration, firstSequence, lastSequence,
             resumable: plan.resumable, backupPath: backup!, warnings: plan.warnings,
             identitySeed: plan.thread.sourceKey, currentSourceKey: plan.thread.sourceKey,
             ...(plan.thread.leafId ? { sourceLeafId: plan.thread.leafId } : {}),

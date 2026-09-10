@@ -5,7 +5,12 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { importConversations } from "../src/target/importer.js";
-import { canonicalConversation, canonicalThread, createMigration40Target, eventCount } from "./helpers.js";
+import { canonicalConversation, canonicalThread, createTarget, eventCount } from "./helpers.js";
+
+import { SUPPORTED_MIGRATIONS } from "../src/target/schema.js";
+
+let fixtureMigration = 40;
+const createFixture = (root: string, migration = fixtureMigration) => createTarget(root, migration);
 
 let originalLedgerDir: string | undefined;
 
@@ -15,13 +20,14 @@ afterEach(() => {
   else process.env.T3_IMPORT_DATA_DIR = originalLedgerDir;
 });
 
-describe("migration-40 writer", () => {
+describe.each(SUPPORTED_MIGRATIONS)("migration-%i writer", (migration) => {
+  beforeEach(() => { fixtureMigration = migration; });
   it("writes completed, interrupted, failed, and included active snapshots as settled T3 sessions", async () => {
     const root = await mkdtemp(join(tmpdir(), "t3-import-terminal-"));
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const thread = canonicalThread(workspace);
     const fixture = thread.turns[0]!;
     const { completedAt: _completedAt, ...activeFixture } = structuredClone(fixture);
@@ -46,7 +52,7 @@ describe("migration-40 writer", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const selection = { conversation: canonicalConversation(workspace), resume: true };
 
     const first = await importConversations([selection], paths, { dryRun: false, resume: true });
@@ -70,7 +76,7 @@ describe("migration-40 writer", () => {
 
   it("fails closed on unknown migrations", async () => {
     const root = await mkdtemp(join(tmpdir(), "t3-import-schema-"));
-    const paths = createMigration40Target(join(root, "t3"), 41);
+    const paths = createFixture(join(root, "t3"), 51);
     await expect(importConversations([], paths, { dryRun: true, resume: true }))
       .rejects.toMatchObject({ exitCode: 3 });
   });
@@ -80,7 +86,7 @@ describe("migration-40 writer", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const thread = canonicalThread(workspace);
     thread.turns[0]!.user.attachments.push({ sourceId: "missing", name: "missing.png", mimeType: "image/png", sizeBytes: 10, path: join(root, "does-not-exist.png") });
 
@@ -93,7 +99,7 @@ describe("migration-40 writer", () => {
     const root = await mkdtemp(join(tmpdir(), "t3-import-compact-"));
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const thread = canonicalThread(workspace);
     thread.turns[0]!.activities = [
       ...Array.from({ length: 12 }, (_, index) => ({ sourceId: `usage-${index}`, tone: "info" as const, kind: "context-window.updated", summary: "Usage", timestamp: `2026-01-01T00:00:01.${String(index).padStart(3, "0")}Z`, payload: { usedTokens: index } })),
@@ -116,7 +122,7 @@ describe("migration-40 writer", () => {
     const root = await mkdtemp(join(tmpdir(), "t3-import-limit-"));
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const thread = canonicalThread(workspace);
     const fixtureTurn = thread.turns[0]!;
     thread.turns = Array.from({ length: 160 }, (_, index) => ({
@@ -140,7 +146,7 @@ describe("migration-40 writer", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const selection = { conversation: canonicalConversation(workspace), resume: true };
     await importConversations([selection], paths, { dryRun: false, resume: true });
 

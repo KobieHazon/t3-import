@@ -6,10 +6,15 @@ import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CanonicalConversation, CanonicalThread, CanonicalTurn, TargetPaths } from "../src/core/types.js";
 import { importConversations } from "../src/target/importer.js";
-import { inspectConversationSync, syncConversations } from "../src/target/sync.js";
-import { canonicalConversation, canonicalThread, createMigration40Target, eventCount } from "./helpers.js";
+import { bootstrapCheckpoint, fallbackRecord, inspectConversationSync, readEvents, syncConversations } from "../src/target/sync.js";
+import { canonicalConversation, canonicalThread, createTarget, eventCount } from "./helpers.js";
 import { legacyTurnSemanticHash } from "../src/core/checkpoint.js";
 import { deterministicUuid } from "../src/core/util.js";
+
+import { SUPPORTED_MIGRATIONS } from "../src/target/schema.js";
+
+let fixtureMigration = 40;
+const createFixture = (root: string, migration = fixtureMigration) => createTarget(root, migration);
 
 let originalLedgerDir: string | undefined;
 
@@ -35,7 +40,7 @@ function secondTurn(): CanonicalTurn {
 function caughtUp(paths: TargetPaths): void {
   const db = new Database(paths.dbPath);
   const last = (db.prepare("SELECT COALESCE(MAX(sequence), 0) value FROM orchestration_events").get() as { value: number }).value;
-  db.prepare("INSERT INTO projection_state (projector, last_applied_sequence) VALUES ('test', ?) ON CONFLICT(projector) DO UPDATE SET last_applied_sequence=excluded.last_applied_sequence").run(last);
+  db.prepare("INSERT INTO projection_state (projector, last_applied_sequence, updated_at) VALUES ('test', ?, '2026-01-01T00:00:00.000Z') ON CONFLICT(projector) DO UPDATE SET last_applied_sequence=excluded.last_applied_sequence").run(last);
   db.close();
 }
 
@@ -44,7 +49,7 @@ async function importedFixture(prefix: string): Promise<{ root: string; workspac
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
   process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-  const paths = createMigration40Target(join(root, "t3"));
+  const paths = createFixture(join(root, "t3"));
   const conversation = canonicalConversation(workspace);
   await importConversations([{ conversation, resume: true }], paths, { dryRun: false, resume: true });
   caughtUp(paths);
@@ -60,7 +65,8 @@ function advancedConversation(workspace: string, sourceThread = canonicalThread(
   return conversation;
 }
 
-describe("incremental synchronization", () => {
+describe.each(SUPPORTED_MIGRATIONS)("migration-%i incremental synchronization", (migration) => {
+  beforeEach(() => { fixtureMigration = migration; });
   it("appends a Codex suffix and a repeated sync is a no-op", async () => {
     const { workspace, paths } = await importedFixture("t3-sync-codex-");
     const conversation = advancedConversation(workspace);
@@ -102,7 +108,7 @@ describe("incremental synchronization", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const first = canonicalThread(workspace);
     const second = structuredClone(first);
     second.sourceSessionId = "22222222-2222-4222-8222-222222222222";
@@ -228,12 +234,30 @@ describe("incremental synchronization", () => {
     expect(result.results[0]).toMatchObject({ status: "synced", turnsAdded: 1 });
   });
 
+  it("recovers checkpoints from both old settlement-last and new settlement-first event order", async () => {
+    const { paths, conversation } = await importedFixture("t3-sync-event-order-");
+    const thread = conversation.threads[0]!;
+    const db = new Database(paths.dbPath, { readonly: true });
+    try {
+      const record = fallbackRecord(db, paths, thread)!;
+      const events = readEvents(db, record.threadId);
+      const settled = events.find((row) => row.type === "thread.session-set" && (row.payload.session as { activeTurnId: string | null }).activeTurnId === null)!;
+      const legacy = [...events.filter((row) => row !== settled), settled].map((row, index) => ({ ...row, sequence: index + 1 }));
+      const current = bootstrapCheckpoint(thread, record, events)!;
+      const recovered = bootstrapCheckpoint(thread, record, legacy)!;
+      expect(recovered.checkpoint).toEqual(current.checkpoint);
+      expect(current.checkpoint.turns).toHaveLength(1);
+      expect(current.lastSequence).toBe(events.at(-1)!.sequence);
+      expect(recovered.lastSequence).toBe(legacy.at(-1)!.sequence);
+    } finally { db.close(); }
+  });
+
   it("recovers a legacy Codex import seeded by the bare session ID", async () => {
     const root = await mkdtemp(join(tmpdir(), "t3-sync-legacy-codex-seed-"));
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "legacy-ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const legacyThread = canonicalThread(workspace);
     legacyThread.sourceKey = legacyThread.sourceSessionId;
     await importConversations([
@@ -291,7 +315,7 @@ describe("incremental synchronization", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const initial = canonicalThread(workspace) as CanonicalThread;
     initial.source = "claude";
     initial.sourceSessionId = "claude-session";
@@ -329,7 +353,7 @@ describe("incremental synchronization", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const thread = canonicalThread(workspace);
     thread.source = "claude";
     thread.sourceSessionId = "claude-duplicate-session";

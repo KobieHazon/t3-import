@@ -16,7 +16,7 @@ import { checkpointForThread, legacyTurnSemanticHash, turnSemanticHash, type Imp
 import { canonicalPath, deterministicUuid, isObject, sha256, stringValue } from "../core/util.js";
 import { safetyError, writeError } from "../core/errors.js";
 import type { ProviderSelection, TargetOverrides } from "./config.js";
-import { assertT3Closed, SUPPORTED_MIGRATION, validateTargetDatabase } from "./schema.js";
+import { assertT3Closed, targetMigration, validateTargetDatabase } from "./schema.js";
 import { listImports, recordImports, type LedgerRecord, type StoredLedgerRecord } from "./ledger.js";
 import {
   IMPORTER_VERSION,
@@ -164,7 +164,7 @@ export function fallbackRecord(db: Database.Database, paths: TargetPaths, thread
     targetId: targetId(paths), source: thread.source, sourceSessionId: thread.sourceSessionId,
     sourceKey: seed, sourceFingerprint: "", projectId, threadId,
     importedAt: stringValue(created.payload.createdAt) ?? thread.createdAt,
-    importerVersion: "legacy", migration: SUPPORTED_MIGRATION,
+    importerVersion: "legacy", migration: targetMigration(db),
     firstSequence: created.sequence, lastSequence: events.at(-1)?.sequence ?? created.sequence,
     resumable: true, backupPath: "", warnings: [], identitySeed: seed,
     currentSourceKey: seed, sourceTitle: stringValue(created.payload.title) ?? thread.title,
@@ -196,7 +196,7 @@ function replacementMetadataRecord(db: Database.Database, paths: TargetPaths, th
         targetId: targetId(paths), source: thread.source, sourceSessionId: thread.sourceSessionId,
         sourceKey, sourceFingerprint: "", projectId, threadId: row.threadId,
         importedAt: stringValue(payload.createdAt) ?? thread.createdAt, importerVersion: "metadata-recovered",
-        migration: SUPPORTED_MIGRATION, firstSequence: row.sequence,
+        migration: targetMigration(db), firstSequence: row.sequence,
         lastSequence: events.at(-1)?.sequence ?? row.sequence, resumable: true, backupPath: "",
         warnings: ["Recovered canonical replacement identity from T3 event metadata."], identitySeed,
         currentSourceKey: sourceKey, sourceTitle: stringValue(payload.title) ?? thread.title,
@@ -239,14 +239,18 @@ export function bootstrapCheckpoint(thread: CanonicalThread, record: StoredLedge
     const settled = importedEvent(`turn.${index}.settled`, `turn.${index}.session-ready`);
     if (!user || !start || !running || !settled) break;
     if (stringValue(user.payload.text) !== turn.user.text || stringValue(running.metadata.providerTurnId) !== turn.id) return undefined;
-    const assistant = events
-      .filter((row) => row.sequence > user.sequence && row.sequence < settled.sequence && row.type === "thread.message-sent" && row.payload.role === "assistant")
+    // New imports settle before their messages for per-projector bootstrap;
+    // older imports settled last. The next user message bounds either layout.
+    const nextUser = events.find((row) => row.sequence > user.sequence && row.type === "thread.message-sent" && row.payload.role === "user");
+    const turnEvents = events.filter((row) => row.sequence >= user.sequence && row.sequence < (nextUser?.sequence ?? Infinity));
+    const assistant = turnEvents
+      .filter((row) => row.type === "thread.message-sent" && row.payload.role === "assistant")
       .map((row) => stringValue(row.payload.text) ?? "");
     if (assistant.join("\n\u0000\n") !== turn.assistant.map((message) => message.text).join("\n\u0000\n")) return undefined;
     const status = terminalStatusFromEvent(settled);
     if (!status || status !== turn.status) return undefined;
     turns.push({ id: turn.id, status, ...(turn.terminalReason ? { terminalReason: turn.terminalReason } : {}), ...(turn.terminalError ? { terminalError: turn.terminalError } : {}), hash: turnSemanticHash(turn) });
-    lastSequence = Math.max(lastSequence, settled.sequence);
+    lastSequence = Math.max(lastSequence, settled.sequence, ...turnEvents.map((row) => row.sequence));
   }
   return turns.length > 0 ? { checkpoint: { version: 2, turns }, lastSequence } : undefined;
 }
@@ -509,7 +513,7 @@ export async function syncConversations(selections: SyncSelection[], paths: Targ
             currentSourceKey: plan.thread.sourceKey,
             ...(plan.thread.leafId ? { sourceLeafId: plan.thread.leafId } : {}),
             sourceTitle: plan.thread.title, checkpoint: plan.checkpoint!, syncedAt: new Date().toISOString(),
-            importerVersion: IMPORTER_VERSION, migration: SUPPORTED_MIGRATION,
+            importerVersion: IMPORTER_VERSION, migration: schema.migration,
             lastSequence: last, backupPath: backup ?? record.backupPath, warnings: plan.result.warnings,
             isCanonical: true,
           });

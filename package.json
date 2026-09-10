@@ -1,6 +1,6 @@
 {
   "name": "@carlosgtrz/t3-import",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Import, synchronize, and safely replace Codex and Claude Code conversations in T3 Code",
   "keywords": [
     "t3code",
@@ -39,7 +39,10 @@
     "typecheck": "tsc --noEmit",
     "prepack": "npm run build",
     "prepublishOnly": "npm run typecheck && npm test",
-    "release:check": "npm publish --dry-run --access public"
+    "release:check": "npm publish --dry-run --access public",
+    "compat:prepare": "node scripts/compatibility/prepare.mjs",
+    "compat:schemas": "node scripts/compatibility/generate-schemas.mjs",
+    "test:compatibility": "npm run compat:prepare && tsx scripts/compatibility/run.ts"
   },
   "engines": {
     "node": ">=22"

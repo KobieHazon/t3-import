@@ -8,7 +8,12 @@ import type { CanonicalTurn, TargetPaths } from "../src/core/types.js";
 import { importConversations } from "../src/target/importer.js";
 import { inspectConversationReplacement, replaceConversations, replacementThreadId } from "../src/target/replace.js";
 import { inspectConversationSync, syncConversations } from "../src/target/sync.js";
-import { canonicalConversation, canonicalThread, createMigration40Target, eventCount } from "./helpers.js";
+import { canonicalConversation, canonicalThread, createTarget, eventCount } from "./helpers.js";
+
+import { SUPPORTED_MIGRATIONS } from "../src/target/schema.js";
+
+let fixtureMigration = 40;
+const createFixture = (root: string, migration = fixtureMigration) => createTarget(root, migration);
 
 let originalLedgerDir: string | undefined;
 
@@ -21,7 +26,7 @@ afterEach(() => {
 function caughtUp(paths: TargetPaths): void {
   const db = new Database(paths.dbPath);
   const last = (db.prepare("SELECT COALESCE(MAX(sequence), 0) value FROM orchestration_events").get() as { value: number }).value;
-  db.prepare("INSERT INTO projection_state (projector, last_applied_sequence) VALUES ('test', ?) ON CONFLICT(projector) DO UPDATE SET last_applied_sequence=excluded.last_applied_sequence").run(last);
+  db.prepare("INSERT INTO projection_state (projector, last_applied_sequence, updated_at) VALUES ('test', ?, '2026-01-01T00:00:00.000Z') ON CONFLICT(projector) DO UPDATE SET last_applied_sequence=excluded.last_applied_sequence").run(last);
   db.close();
 }
 
@@ -39,14 +44,15 @@ async function fixture(prefix: string) {
   const workspace = join(root, "workspace");
   mkdirSync(workspace);
   process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-  const paths = createMigration40Target(join(root, "t3"));
+  const paths = createFixture(join(root, "t3"));
   const conversation = canonicalConversation(workspace);
   await importConversations([{ conversation, resume: true }], paths, { dryRun: false, resume: true });
   caughtUp(paths);
   return { root, workspace, paths, conversation };
 }
 
-describe("canonical task replacement", () => {
+describe.each(SUPPORTED_MIGRATIONS)("migration-%i canonical task replacement", (migration) => {
+  beforeEach(() => { fixtureMigration = migration; });
   it("creates a complete canonical task, deletes the old stream, and transfers resume state", async () => {
     const { root, paths, conversation } = await fixture("t3-replace-");
     conversation.threads[0]!.title = "Latest provider title";
@@ -89,7 +95,7 @@ describe("canonical task replacement", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const sessionId = "88888888-8888-4888-8888-888888888888";
     const makeThread = (leaf: string, currentBranch: boolean) => {
       const thread = structuredClone(canonicalThread(workspace));
@@ -195,7 +201,7 @@ describe("canonical task replacement", () => {
     const workspace = join(root, "workspace");
     mkdirSync(workspace);
     process.env.T3_IMPORT_DATA_DIR = join(root, "ledger");
-    const paths = createMigration40Target(join(root, "t3"));
+    const paths = createFixture(join(root, "t3"));
     const thread = canonicalThread(workspace);
     thread.source = "claude"; thread.sourceSessionId = "claude-session";
     thread.sourceKey = "claude:claude-session:leaf-1"; thread.leafId = "leaf-1";

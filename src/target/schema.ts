@@ -4,7 +4,16 @@ import type { TargetPaths } from "../core/types.js";
 import { compatibilityError, safetyError } from "../core/errors.js";
 import { isObject, stringValue } from "../core/util.js";
 
-export const SUPPORTED_MIGRATION = 40;
+export const SUPPORTED_MIGRATIONS = [40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50] as const;
+
+/** Read the current target version, including when recovering an absent ledger. */
+export function targetMigration(db: Database.Database): number {
+  const row = db.prepare("SELECT COALESCE(MAX(migration_id), 0) migration FROM effect_sql_migrations").get() as { migration: number };
+  if (!SUPPORTED_MIGRATIONS.some((migration) => migration === row.migration)) {
+    throw compatibilityError(`Unsupported T3 schema migration ${row.migration}; supported migrations are 40–50.`);
+  }
+  return row.migration;
+}
 
 const REQUIRED_COLUMNS: Record<string, string[]> = {
   orchestration_events: ["sequence", "event_id", "aggregate_kind", "stream_id", "stream_version", "event_type", "occurred_at", "actor_kind", "payload_json", "metadata_json"],
@@ -73,8 +82,7 @@ export function validateTargetDatabase(db: Database.Database): SchemaInfo {
     for (const column of columns) if (!available.has(column)) throw compatibilityError(`Unsupported T3 schema: ${table}.${column} is missing.`);
   }
   if (!names.has("effect_sql_migrations")) throw compatibilityError("Not a compatible T3 database: missing migrations table.");
-  const migrationRow = db.prepare("SELECT COALESCE(MAX(migration_id), 0) migration FROM effect_sql_migrations").get() as { migration: number };
-  if (migrationRow.migration !== SUPPORTED_MIGRATION) throw compatibilityError(`Unsupported T3 schema migration ${migrationRow.migration}; expected ${SUPPORTED_MIGRATION}.`);
+  const migration = targetMigration(db);
   const events = db.prepare("SELECT COUNT(*) count, COALESCE(MAX(sequence), 0) maxSequence FROM orchestration_events").get() as { count: number; maxSequence: number };
-  return { migration: migrationRow.migration, integrity, eventCount: events.count, maxSequence: events.maxSequence };
+  return { migration, integrity, eventCount: events.count, maxSequence: events.maxSequence };
 }
