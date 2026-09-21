@@ -53,5 +53,20 @@
     "migration": 50,
     "commit": "b7b3ef1e6fcb5c22a9790d2578fe8af7ce396835",
     "effect": "4.0.0-rc.112"
+  },
+  {
+    "migration": 51,
+    "commit": "4fed6cfb3517ef9af9b2a361142152c079504530",
+    "effect": "4.0.0-rc.112"
+  },
+  {
+    "migration": 52,
+    "commit": "719a76ca1dbf5490f1aa33ffb9966301e02be9a9",
+    "effect": "4.0.0-rc.112"
+  },
+  {
+    "migration": 53,
+    "commit": "adcd90858c3bfece59095465d2f49860ba3dcea9",
+    "effect": "4.0.0-rc.115"
   }
 ]

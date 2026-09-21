@@ -44,6 +44,17 @@ for (const ref of references) {
     writeFileSync(join(snapshot, ".reference"), ref.commit);
   }
   if (readFileSync(join(snapshot, ".reference"), "utf8") !== ref.commit) throw new Error(`Wrong reference in ${snapshot}`);
+  // Newer ProviderService imports device helpers backed by the workspace SSH package.
+  // Also fill existing cached snapshots when the harness gains a dependency.
+  const packages = ["contracts", "shared", "effect-codex-app-server"];
+  if (execFileSync("git", ["-C", repo, "ls-tree", ref.commit, "packages/ssh"], { encoding: "utf8" }).trim()) {
+    packages.push("ssh");
+    if (!existsSync(join(snapshot, "packages/ssh/package.json"))) {
+      const archive = join(base, `${ref.migration}-ssh.tar`);
+      execFileSync("git", ["-C", repo, "archive", "--format=tar", `--output=${archive}`, ref.commit, "packages/ssh"]);
+      execFileSync("tar", ["-xf", archive, "-C", snapshot]);
+    }
+  }
   writeFileSync(join(snapshot, "package.json"), JSON.stringify({ private: true, type: "module" }));
   writeFileSync(join(snapshot, "apps/server/package.json"), execFileSync("git", ["-C", repo, "show", `${ref.commit}:apps/server/package.json`]));
   const modules = join(snapshot, "node_modules");
@@ -52,7 +63,7 @@ for (const ref of references) {
     if (name.startsWith(".")) continue;
     link(join(poolModules, name), join(modules, name));
   }
-  for (const name of ["contracts", "shared", "effect-codex-app-server"]) {
+  for (const name of packages) {
     link(join(snapshot, "packages", name), join(modules, "@t3tools", name));
   }
   copyFileSync(join(root, "scripts/compatibility/reference-runner.mjs"), join(snapshot, "runner.mjs"));

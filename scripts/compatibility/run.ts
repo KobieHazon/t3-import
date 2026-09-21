@@ -16,6 +16,7 @@ import { validateTargetDatabase } from "../../src/target/schema.js";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const base = join(root, "artifacts/compatibility");
 const refs = JSON.parse(readFileSync(join(root, "scripts/compatibility/references.json"), "utf8")) as Array<{ migration: number; commit: string }>;
+const latestMigration = Math.max(...refs.map((ref) => ref.migration));
 const selected = process.argv[2] ? refs.filter((ref) => ref.migration === Number(process.argv[2])) : refs;
 assert(selected.length, "No matching reference");
 mkdirSync(base, { recursive: true });
@@ -107,9 +108,9 @@ async function scenario(start: number, source: SourceName, upgrade: boolean): Pr
   assert.equal(projected.bindings[0].providerInstanceId, instanceId);
   assert.equal(projected.bindings[0].resumeCursor[source === "codex" ? "threadId" : "resume"], thread.sourceSessionId);
   assert.equal((await importConversations([{ conversation, resume: true }], paths, { dryRun: false, resume: true })).status, "already-imported");
-  const migration = upgrade ? 50 : start;
+  const migration = upgrade ? latestMigration : start;
   if (upgrade) {
-    reference(50, "migrate", home);
+    reference(latestMigration, "migrate", home);
     assert.equal(listImports(targetId(paths), source)[0]!.migration, start, "Upgrade must preserve old ledger records");
   }
   // Recover the existing stream without relying on its original external ledger.
@@ -163,7 +164,7 @@ async function scenario(start: number, source: SourceName, upgrade: boolean): Pr
   } finally { db.close(); }
   results.push({ start, migration, source, upgrade, status: "passed" });
   writeFileSync(join(runRoot, "results.json"), JSON.stringify(results, null, 2));
-  console.log(`PASS ${source}: migration ${start}${upgrade ? " → 50" : ""}`);
+  console.log(`PASS ${source}: migration ${start}${upgrade ? ` → ${latestMigration}` : ""}`);
 }
 
 const originalLedger = process.env.T3_IMPORT_DATA_DIR;
@@ -171,7 +172,7 @@ try {
   for (const ref of selected) {
     for (const source of ["codex", "claude"] as const) {
       await scenario(ref.migration, source, false);
-      if (ref.migration < 50) await scenario(ref.migration, source, true);
+      if (ref.migration < latestMigration) await scenario(ref.migration, source, true);
     }
   }
   console.log(`${results.length} integration scenarios passed. Results: ${join(runRoot, "results.json")}`);
