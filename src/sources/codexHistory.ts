@@ -53,14 +53,17 @@ export async function normalizeCodexHistory(thread: Record<string, unknown>, sum
   const turns: CanonicalTurn[] = [];
   let ignoredInProgressTurns = 0;
   const seenTurns = new Set<string>();
+  let lastHistoryTime = new Date(summary.createdAt).valueOf() - 1;
   for (const raw of thread.turns) {
     if (!isObject(raw) || typeof raw.id !== "string") throw sourceError("Invalid Codex history turn");
     if (seenTurns.has(raw.id)) throw sourceError("Duplicate Codex history turn id");
     seenTurns.add(raw.id);
     if (!["completed", "interrupted", "failed", "inProgress"].includes(String(raw.status))) throw sourceError(`Unknown Codex turn status: ${String(raw.status)}`);
     if (raw.status === "inProgress" && !includeIncomplete) { ignoredInProgressTurns++; continue; }
-    const startedAt = isoTimestamp(raw.startedAt, summary.createdAt);
-    const completedAt = raw.completedAt == null ? undefined : isoTimestamp(raw.completedAt, startedAt);
+    const recordedStart = isoTimestamp(raw.startedAt, summary.createdAt);
+    const startTime = Math.max(new Date(recordedStart).valueOf(), lastHistoryTime + 1);
+    const startedAt = new Date(startTime).toISOString();
+    let completedAt = raw.completedAt == null ? undefined : isoTimestamp(raw.completedAt, startedAt);
     const users: CanonicalMessage[] = [];
     const assistant: CanonicalMessage[] = [];
     const activities: CanonicalActivity[] = [];
@@ -108,6 +111,8 @@ export async function normalizeCodexHistory(thread: Record<string, unknown>, sum
       warnings.add(`Turn ${raw.id} has no recorded user input; a continuation placeholder was inserted.`);
       users.push({ sourceId: `${raw.id}:continuation`, role: "user", text: "[Codex continuation without a recorded user message]", timestamp: startedAt, attachments: [] });
     }
+    lastHistoryTime = Math.max(startTime, lastItemTime, completedAt ? new Date(completedAt).valueOf() : startTime);
+    if (completedAt) completedAt = new Date(lastHistoryTime).toISOString();
     const first = users[0]!;
     const error = isObject(raw.error) ? stringValue(raw.error.message) : stringValue(raw.error);
     turns.push({ id: raw.id, startedAt, ...(completedAt ? { completedAt } : {}), status: raw.status as CanonicalTurn["status"],
