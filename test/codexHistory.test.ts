@@ -140,6 +140,14 @@ it("fails on unknown terminal status and duplicate item ids", async () => {
   await expect(normalizeCodexHistory({turns:[{...turn,items:[user,user]}]},summary)).rejects.toMatchObject({exitCode:5});
 });
 
+it("preserves automatic continuations and item order when timestamps are missing", async () => {
+  const parsed = await normalizeCodexHistory({turns:[{...turn,items:[{...answer,id:"z-first",text:"First"},{...answer,id:"a-second",text:"Second"}]}]},summary);
+  expect(parsed.turns[0]!.user.text).toBe("[Codex continuation without a recorded user message]");
+  expect(parsed.turns[0]!.assistant.map((message)=>message.text)).toEqual(["First","Second"]);
+  expect(parsed.turns[0]!.assistant[0]!.timestamp < parsed.turns[0]!.assistant[1]!.timestamp).toBe(true);
+  expect(parsed.warnings).toEqual([expect.stringContaining("continuation placeholder")]);
+});
+
 it("reports unsupported inputs and missing local images without losing the rest of a chat", async () => {
   const parsed = await normalizeCodexHistory({turns:[{...turn,items:[{...user,content:[{type:"audio",url:"https://example.test/audio"}]},answer]}]},summary);
   expect(parsed.warnings).toEqual([expect.stringContaining("audio")]);

@@ -67,13 +67,17 @@ export async function normalizeCodexHistory(thread: Record<string, unknown>, sum
     const plans: CanonicalTurn["plans"] = [];
     const entries = Array.isArray(raw.itemEntries) ? raw.itemEntries : Array.isArray(raw.items) ? raw.items.map((item) => ({ item })) : [];
     const seen = new Set<string>();
+    let lastItemTime = new Date(startedAt).valueOf() - 1;
     for (const entry of entries) {
       if (!isObject(entry) || !isObject(entry.item)) throw sourceError("Invalid Codex history item");
       const item = entry.item;
       const id = stringValue(item.id);
       if (!id || seen.has(id)) throw sourceError("Missing or duplicate Codex history item id");
       seen.add(id);
-      const timestamp = isoTimestamp(entry.startedAtMs ?? entry.completedAtMs, startedAt);
+      const recorded = isoTimestamp(entry.startedAtMs ?? entry.completedAtMs, startedAt);
+      // Preserve API order when old producers omitted item timestamps.
+      lastItemTime = Math.max(new Date(recorded).valueOf(), lastItemTime + 1);
+      const timestamp = new Date(lastItemTime).toISOString();
       if (item.type === "userMessage") {
         const content = await userContent(item.content, id, warnings);
         if (SYNTHETIC_PREFIXES.some((prefix) => content.text.startsWith(prefix))) continue;
@@ -100,8 +104,9 @@ export async function normalizeCodexHistory(thread: Record<string, unknown>, sum
       }
     }
     if (!users.length) {
-      if (assistant.length || activities.length || plans.length) warnings.add(`Turn ${raw.id} has no visible user input and cannot be imported.`);
-      continue;
+      if (!assistant.length && !activities.length && !plans.length) continue;
+      warnings.add(`Turn ${raw.id} has no recorded user input; a continuation placeholder was inserted.`);
+      users.push({ sourceId: `${raw.id}:continuation`, role: "user", text: "[Codex continuation without a recorded user message]", timestamp: startedAt, attachments: [] });
     }
     const first = users[0]!;
     const error = isObject(raw.error) ? stringValue(raw.error.message) : stringValue(raw.error);
