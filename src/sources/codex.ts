@@ -591,16 +591,20 @@ export class CodexSource implements SourceAdapter {
       catch (error) { if (!isObject(error) || error.code !== "ENOENT") throw error; }
       if (!fileStat || this.appMetadata.get(summary.id)?.raw?.historyMode === "paginated") {
         const history = await (await this.session()).history(summary.id);
-        const thread = await normalizeCodexHistory(history, summary, options.includeIncomplete ?? false);
-        if (summary.archived) thread.warnings.push("Source Codex chat is archived; T3 imports it as a visible task.");
-        const fingerprint = createHash("sha256");
-        for (const turn of thread.turns) {
-          const { assistant, activities, plans, ...metadata } = turn;
-          fingerprint.update(JSON.stringify(metadata));
-          for (const item of [...assistant, ...activities, ...plans]) fingerprint.update(JSON.stringify(item));
+        // Older stored rollouts can outlive their API history rows. Only an
+        // explicitly empty history permits falling back to a readable file.
+        if (!fileStat || !Array.isArray(history.turns) || history.turns.length > 0) {
+          const thread = await normalizeCodexHistory(history, summary, options.includeIncomplete ?? false);
+          if (summary.archived) thread.warnings.push("Source Codex chat is archived; T3 imports it as a visible task.");
+          const fingerprint = createHash("sha256");
+          for (const turn of thread.turns) {
+            const { assistant, activities, plans, ...metadata } = turn;
+            fingerprint.update(JSON.stringify(metadata));
+            for (const item of [...assistant, ...activities, ...plans]) fingerprint.update(JSON.stringify(item));
         }
         return { summary: { ...summary, title: thread.title, status: thread.ignoredInProgressTurns ? "incomplete" : "complete" },
           threads: [thread], fingerprint: fingerprint.digest("hex") };
+        }
       }
       const snapshot = await readStableJsonl(summary.path);
       let appThread: Record<string, unknown> | null = this.appMetadata.get(summary.id)?.raw ?? null;

@@ -31,7 +31,7 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function server(repeatCursor = false, paginated = true): CodexSource {
+function server(repeatCursor = false, paginated = true, emptyHistory = false): CodexSource {
   const path = join(root, "codex.mjs");
   writeFileSync(path, `#!/usr/bin/env node
 import { createInterface } from "node:readline";
@@ -45,6 +45,7 @@ for await (const line of createInterface({input:process.stdin})) {
  if(method === "thread/read") result = {thread:{...metadata, turns:p.includeTurns ? [${JSON.stringify(turn)}] : []}};
  if(method === "thread/turns/list") result = p.cursor ? {data:[{id:"t2",status:"interrupted",startedAt:1767225603,completedAt:1767225604}],nextCursor:null} : {data:[{id:"t1",status:"completed",startedAt:1767225600,completedAt:1767225602}],nextCursor:"next-turn"};
  if(method === "thread/items/list") result = p.cursor ? {data:[{turnId:p.turnId,item:{...answer,id:p.turnId+":answer"},completedAtMs:1767225602000}],nextCursor:${repeatCursor ? '"next-item"' : 'null'}} : {data:[{turnId:p.turnId,item:{...user,id:p.turnId+":user"},startedAtMs:1767225600000}],nextCursor:"next-item"};
+ if(method === "thread/turns/list" && ${emptyHistory}) result = {data:[],nextCursor:null};
  process.stdout.write(JSON.stringify({id,result})+"\\n");
 }
 `);
@@ -85,6 +86,22 @@ it("hydrates older API threads when no rollout file is available", async () => {
   const found = await adapter.discover({});
   const loaded = await adapter.load(found.find((value)=>value.id === "db-chat")!,{});
   expect(loaded.threads[0]!.turns[0]!.assistant[0]!.text).toBe("World");
+});
+
+it("uses a readable rollout when paginated API history is explicitly empty", async () => {
+  const adapter = server(false,true,true);
+  mkdirSync(join(root,"sessions"));
+  const rows = [
+    {timestamp:"2026-01-01T00:00:00Z",type:"session_meta",payload:{id:"db-chat",cwd:"/workspace"}},
+    {timestamp:"2026-01-01T00:00:01Z",type:"event_msg",payload:{type:"task_started",turn_id:"legacy-turn"}},
+    {timestamp:"2026-01-01T00:00:01Z",type:"response_item",payload:{type:"message",role:"user",content:[{type:"input_text",text:"Legacy question"}]}},
+    {timestamp:"2026-01-01T00:00:02Z",type:"response_item",payload:{type:"message",role:"assistant",content:[{type:"output_text",text:"Legacy answer"}]}},
+    {timestamp:"2026-01-01T00:00:03Z",type:"event_msg",payload:{type:"task_complete",turn_id:"legacy-turn"}},
+  ];
+  writeFileSync(join(root,"sessions","rollout.jsonl"),rows.map(row=>JSON.stringify(row)).join("\n"));
+  const found = await adapter.discover({});
+  const loaded = await adapter.load(found.find(value=>value.id === "db-chat")!,{});
+  expect(loaded.threads[0]!.turns.map(value=>[value.id,value.user.text,value.assistant[0]?.text])).toEqual([["legacy-turn","Legacy question","Legacy answer"]]);
 });
 
 it("imports API history idempotently and appends a settled turn without duplicates", async () => {
