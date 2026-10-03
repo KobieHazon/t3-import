@@ -145,6 +145,7 @@ it("preserves automatic continuations and item order when timestamps are missing
   expect(parsed.turns[0]!.user.text).toBe("[Codex continuation without a recorded user message]");
   expect(parsed.turns[0]!.assistant.map((message)=>message.text)).toEqual(["First","Second"]);
   expect(parsed.turns[0]!.assistant[0]!.timestamp < parsed.turns[0]!.assistant[1]!.timestamp).toBe(true);
+  expect(parsed.turns[0]!.user.timestamp < parsed.turns[0]!.assistant[0]!.timestamp).toBe(true);
   expect(parsed.warnings).toEqual([expect.stringContaining("continuation placeholder")]);
   const adjacent = await normalizeCodexHistory({turns:[{...turn,startedAt:null,completedAt:null},{...turn,id:"t2",startedAt:null,completedAt:null}]},summary);
   expect(adjacent.turns[0]!.assistant[0]!.timestamp < adjacent.turns[1]!.user.timestamp).toBe(true);

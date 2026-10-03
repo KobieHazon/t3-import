@@ -70,7 +70,7 @@ export async function normalizeCodexHistory(thread: Record<string, unknown>, sum
     const plans: CanonicalTurn["plans"] = [];
     const entries = Array.isArray(raw.itemEntries) ? raw.itemEntries : Array.isArray(raw.items) ? raw.items.map((item) => ({ item })) : [];
     const seen = new Set<string>();
-    let lastItemTime = new Date(startedAt).valueOf() - 1;
+    let lastItemTime = new Date(startedAt).valueOf();
     for (const entry of entries) {
       if (!isObject(entry) || !isObject(entry.item)) throw sourceError("Invalid Codex history item");
       const item = entry.item;
@@ -117,7 +117,7 @@ export async function normalizeCodexHistory(thread: Record<string, unknown>, sum
     const error = isObject(raw.error) ? stringValue(raw.error.message) : stringValue(raw.error);
     turns.push({ id: raw.id, startedAt, ...(completedAt ? { completedAt } : {}), status: raw.status as CanonicalTurn["status"],
       ...(error ? { terminalError: error } : {}),
-      user: { ...first, text: users.map((user) => user.text).join("\n\n"), attachments: users.flatMap((user) => user.attachments) },
+      user: { ...first, timestamp: startedAt, text: users.map((user) => user.text).join("\n\n"), attachments: users.flatMap((user) => user.attachments) },
       assistant, activities, plans });
   }
   if (!turns.length && !ignoredInProgressTurns) throw sourceError(`No importable Codex turns in ${summary.id}`);
