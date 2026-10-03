@@ -114,6 +114,8 @@ When `--json` is active, stdout contains one versioned JSON value and diagnostic
 
 Codex discovery includes archived chats. Archived source chats become visible T3 tasks, with a warning; Codex sidebar sections and project display settings are not copied. `--include-subagents` additionally imports child-agent conversations as separate tasks. Automatic continuation turns without a recorded user message retain their output with an explicit continuation placeholder. Missing local images are reported with a visible placeholder while the rest of the chat is preserved. The Codex API must expose readable local history; metadata-only or inaccessible chats fail with a source error. If an already imported chat switches from rollout to API history, synchronization still validates the unchanged canonical prefix and reports a conflict instead of guessing message identity.
 
+Some internal child-agent chats have readable history but are omitted by Codex's `thread/list` API. `--include-subagents` can discover only the chats that API lists (or that have readable rollout files). The importer does not inspect Codex's private SQLite layout to enumerate omitted chats or recover API timeouts.
+
 
 Codex discovery prefers the normalized `codex app-server` API and augments it with rollout JSONL; it falls back to rollout files when app-server is unavailable. Claude discovery streams project JSONL and reconstructs its UUID graph. Automatic compaction roots are reconnected through validated `logicalParentUuid` links, and unambiguous successful API-retry forks are linearized while retaining their retry activity. Genuine alternate Claude leaves that remain become separate historical T3 tasks; only the current leaf receives a resume binding.
 
