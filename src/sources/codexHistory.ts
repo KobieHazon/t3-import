@@ -3,6 +3,7 @@ import { basename, extname } from "node:path";
 import type { CanonicalActivity, CanonicalMessage, CanonicalThread, CanonicalTurn, SourceAttachment, SourceSummary } from "../core/types.js";
 import { sourceError } from "../core/errors.js";
 import { isObject, isoTimestamp, stringValue, truncate } from "../core/util.js";
+import { recoverCodexImages, type EmbeddedCodexImage } from "./codexImages.js";
 
 const SYNTHETIC_PREFIXES = ["<recommended_plugins>", "<environment_context>", "<app-context>", "<permissions instructions>"];
 const TOOL_TYPES: Record<string, string> = {
@@ -11,7 +12,7 @@ const TOOL_TYPES: Record<string, string> = {
   webSearch: "web_search", imageView: "image_view", imageGeneration: "image_generation",
 };
 
-async function userContent(content: unknown, id: string, warnings: Set<string>): Promise<{ text: string; attachments: SourceAttachment[] }> {
+async function userContent(content: unknown, id: string, warnings: Set<string>, recover: (path: string) => Promise<EmbeddedCodexImage | undefined>): Promise<{ text: string; attachments: SourceAttachment[] }> {
   const texts: string[] = [];
   const attachments: SourceAttachment[] = [];
   for (const [index, value] of (Array.isArray(content) ? content : []).entries()) {
@@ -25,6 +26,12 @@ async function userContent(content: unknown, id: string, warnings: Set<string>):
       try { info = await stat(value.path); }
       catch (error) {
         if (!isObject(error) || error.code !== "ENOENT") throw error;
+        const image = await recover(value.path);
+        if (image) {
+          attachments.push({ sourceId: `${id}:image:${index}`, name: basename(value.path), mimeType: image.mimeType, sizeBytes: image.data.length, data: image.data });
+          warnings.add(`Recovered local image from Codex archive: ${value.path}`);
+          continue;
+        }
         warnings.add(`Missing local image: ${value.path}`);
         texts.push(`[Missing image: ${basename(value.path)}]`);
         continue;
@@ -50,6 +57,22 @@ async function userContent(content: unknown, id: string, warnings: Set<string>):
 export async function normalizeCodexHistory(thread: Record<string, unknown>, summary: SourceSummary, includeIncomplete = false): Promise<CanonicalThread> {
   if (!Array.isArray(thread.turns)) throw sourceError(`Codex thread ${summary.id} has no readable turns`);
   const warnings = new Set<string>();
+  const imagePaths = new Set<string>();
+  for (const turn of thread.turns) {
+    if (!isObject(turn)) continue;
+    const entries = Array.isArray(turn.itemEntries) ? turn.itemEntries : Array.isArray(turn.items) ? turn.items.map(item => ({ item })) : [];
+    for (const entry of entries) if (isObject(entry) && isObject(entry.item) && entry.item.type === "userMessage" && Array.isArray(entry.item.content)) {
+      for (const value of entry.item.content) if (isObject(value) && value.type === "localImage" && typeof value.path === "string") imagePaths.add(value.path);
+    }
+  }
+  let imageRecovery: Promise<Map<string, EmbeddedCodexImage>> | undefined;
+  const recover = async (path: string): Promise<EmbeddedCodexImage | undefined> => {
+    imageRecovery ??= recoverCodexImages(stringValue(thread.path) ?? summary.path, summary.id, imagePaths).catch(error => {
+      warnings.add(`Codex archive image recovery unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return new Map();
+    });
+    return (await imageRecovery).get(path);
+  };
   const turns: CanonicalTurn[] = [];
   let ignoredInProgressTurns = 0;
   const seenTurns = new Set<string>();
@@ -82,7 +105,7 @@ export async function normalizeCodexHistory(thread: Record<string, unknown>, sum
       lastItemTime = Math.max(new Date(recorded).valueOf(), lastItemTime + 1);
       const timestamp = new Date(lastItemTime).toISOString();
       if (item.type === "userMessage") {
-        const content = await userContent(item.content, id, warnings);
+        const content = await userContent(item.content, id, warnings, recover);
         if (SYNTHETIC_PREFIXES.some((prefix) => content.text.startsWith(prefix))) continue;
         if (content.text || content.attachments.length) users.push({ sourceId: id, role: "user", text: content.text || "[Image attachment]", timestamp, attachments: content.attachments });
       } else if (item.type === "agentMessage") {
