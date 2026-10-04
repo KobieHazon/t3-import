@@ -105,6 +105,7 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
     const latest = target.prepare("SELECT COALESCE(MAX(stream_version),-1) n FROM orchestration_events WHERE aggregate_kind=? AND stream_id=?");
     const insert = options.dryRun ? undefined : target.prepare("INSERT INTO orchestration_events (event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,command_id,causation_event_id,correlation_id,actor_kind,payload_json,metadata_json,application_event_version) VALUES (?,?,?,?,?,?,NULL,NULL,NULL,'server',?,?,2)");
     const versions = new Map<string, number>();
+    let snapshotKey = "";
     const upsert = (table: string, key: string, values: Row): void => {
       const columns = Object.keys(values);
       target.prepare(`INSERT INTO ${table} (${columns.join(",")}) VALUES (${columns.map(() => "?").join(",")}) ON CONFLICT(${key}) DO UPDATE SET ${columns.filter(column => column !== key).map(column => `${column}=excluded.${column}`).join(",")}`).run(...Object.values(values));
@@ -125,8 +126,8 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
     };
     const append = (threadId: string, type: string, at: string, payload: Payload, aggregate = "thread"): void => {
       const json = JSON.stringify(payload);
-      const id = `${PREFIX}:${type}:${hash(`${threadId}:${json}`)}`;
-      if (exists.get(id)) return;
+      const id = `${PREFIX}:${type}:${hash(`${threadId}:${snapshotKey}:${json}`)}`;
+      if (exists.get(id)) { if (insert) project(type, payload, json); return; }
       result.events++;
       if (insert) {
         const key = `${aggregate}:${threadId}`;
@@ -149,11 +150,34 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
       const fingerprint = hash(JSON.stringify([row, messages, turns, activities, plans, runtime, pullRequests]));
       const checkpoint = hasCheckpoints ? target.prepare("SELECT fingerprint FROM t3_import_v2_checkpoints WHERE thread_id=?").get(row.thread_id) as Row | undefined : undefined;
       if (checkpoint?.fingerprint === fingerprint) { result.unchangedThreads++; continue; }
+      snapshotKey = hash(`timeline-order:1:${fingerprint}`);
       // A source snapshot must never overwrite work performed after native continuation.
       if (target.prepare("SELECT 1 FROM orchestration_v2_projection_runs WHERE thread_id=? AND run_id NOT LIKE 'migration:v1:run:%' LIMIT 1").get(row.thread_id)) throw safetyError(`Thread '${row.thread_id}' has native V2 runs; its V1 snapshot must not overwrite continued work.`);
       const currentRow = target.prepare("SELECT payload_json FROM orchestration_v2_projection_threads WHERE thread_id=?").get(row.thread_id) as Row | undefined;
       const current = currentRow ? parse<Payload>(currentRow.payload_json, {}) : undefined;
       if (current && current.historyOrigin !== "v1_import") throw safetyError(`Thread '${row.thread_id}' is not an imported V1 history.`);
+      if (!options.dryRun && current) {
+        // An earlier user message can shift every historical run/item ordinal.
+        // Free their unique positions before assigning the complete new order.
+        // Readers cannot observe these temporary values inside this transaction.
+        const runMax = (target.prepare("SELECT COALESCE(MAX(ordinal),0) n FROM orchestration_v2_projection_runs WHERE thread_id=?").get(row.thread_id) as Row).n as number;
+        const itemMax = (target.prepare("SELECT COALESCE(MAX(ordinal),0) n FROM orchestration_v2_projection_turn_items WHERE thread_id=?").get(row.thread_id) as Row).n as number;
+        const runOffset = runMax + messages.length + 1;
+        const itemOffset = itemMax + (messages.length + 1) * 1_000_000 + activities.length + plans.length + 1;
+        if (!Number.isSafeInteger(runMax + runOffset) || !Number.isSafeInteger(itemMax + itemOffset)) throw compatibilityError("Historical ordinal range exceeds safe integer storage.");
+        // Record the temporary positions too, so native event replay can safely
+        // reconstruct the same transition without unique-ordinal collisions.
+        const previousRuns = target.prepare("SELECT payload_json FROM orchestration_v2_projection_runs WHERE thread_id=? ORDER BY ordinal DESC").all(row.thread_id) as Row[];
+        const previousItems = target.prepare("SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE thread_id=? ORDER BY ordinal DESC").all(row.thread_id) as Row[];
+        for (const previous of previousRuns) {
+          const payload = parse<Payload>(previous.payload_json, {});
+          append(row.thread_id, "run.updated", row.updated_at, { ...payload, ordinal: (payload.ordinal as number) + runOffset });
+        }
+        for (const previous of previousItems) {
+          const payload = parse<Payload>(previous.payload_json, {});
+          append(row.thread_id, "turn-item.updated", row.updated_at, { ...payload, ordinal: (payload.ordinal as number) + itemOffset });
+        }
+      }
       if (!target.prepare("SELECT 1 FROM projection_projects WHERE project_id=?").get(row.project_id)) {
         const project = source.prepare("SELECT payload_json,occurred_at FROM orchestration_events WHERE aggregate_kind='project' AND stream_id=? AND event_type='project.created' ORDER BY sequence DESC LIMIT 1").get(row.project_id) as Row | undefined;
         if (!project) throw compatibilityError(`Missing project creation event for '${row.project_id}'.`);
@@ -171,7 +195,6 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
         appThread.activeProviderThreadId = providerThreadId;
         result.resumeBindings++;
       } else if (runtime) result.warnings.push(`Thread '${row.thread_id}' has no supported native resume identity.`);
-      append(row.thread_id, "thread.metadata-updated", row.updated_at, appThread);
       if (providerThreadId) append(row.thread_id, "provider-thread.updated", row.updated_at, {
         id: providerThreadId, driver, providerInstanceId: runtime?.provider_instance_id ?? driver,
         providerSessionId: null, appThreadId: row.thread_id, ownerNodeId: null,
@@ -213,12 +236,16 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
       }
       timeline.sort((a, b) => a.row.created_at.localeCompare(b.row.created_at) || (a.kind === "message" && a.row.role === "user" ? -1 : b.kind === "message" && b.row.role === "user" ? 1 : 0));
       const ordinals = new Map<string, number>();
+      let previousOrdinal = 0;
       for (const item of timeline) {
         const itemRow = item.row;
         const runKey = item.run?.id ?? "unassigned";
         const inRun = (ordinals.get(runKey) ?? 0) + 1; ordinals.set(runKey, inRun);
         if (inRun >= 1_000_000) throw compatibilityError(`Thread '${row.thread_id}' exceeds the native per-run item limit.`);
-        const ordinal = (item.run?.ordinal ?? 0) * 1_000_000 + inRun;
+        // Recovered turns can interleave with older synthetic user timestamps.
+        // Keep source timeline order even when their run ordinals go backwards.
+        const ordinal = Math.max(previousOrdinal + 1, (item.run?.ordinal ?? 0) * 1_000_000 + inRun);
+        previousOrdinal = ordinal;
         const itemId = item.kind === "message" ? `migration:v1:turn-item:${itemRow.message_id}` : `${PREFIX}:${item.kind}:${itemRow.activity_id ?? itemRow.plan_id}`;
         const base = { id: itemId, threadId: row.thread_id, runId: item.run?.id ?? null, nodeId: null,
           providerThreadId, providerTurnId: null, nativeItemRef: null, parentItemId: null, ordinal,
@@ -257,6 +284,9 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
         }
         append(row.thread_id, "turn-item.updated", base.updatedAt, payload);
       }
+      // Native reducers advance thread.updatedAt for each content event. Restore
+      // authoritative legacy metadata last so a rebuild matches the saved view.
+      append(row.thread_id, "thread.metadata-updated", row.updated_at, appThread);
       if (!options.dryRun) target.prepare("INSERT INTO t3_import_v2_checkpoints VALUES (?,?) ON CONFLICT(thread_id) DO UPDATE SET fingerprint=excluded.fingerprint").run(row.thread_id, fingerprint);
       result.threads++;
     }

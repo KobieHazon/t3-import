@@ -118,4 +118,45 @@ describe("native V2 legacy bridge", () => {
     const db = new Database(legacy.dbPath, { readonly: true });
     expect(() => validateTargetDatabase(db)).toThrow("retired state.sqlite"); db.close();
   });
+  it("reorders runs and item positions safely when an earlier historical user message appears", async () => {
+    const { legacy, paths } = fixture();
+    await upgradeLegacyToV2(paths, { legacyDbPath: legacy.dbPath, dryRun: false });
+    const source = new Database(legacy.dbPath);
+    seed(source, "projection_thread_messages", { thread_id: "t", message_id: "earlier", turn_id: null, role: "user", text: "Earlier recovered prompt", is_streaming: 0, created_at: "2025-12-31T00:00:00.000Z", updated_at: "2025-12-31T00:00:00.000Z", attachments_json: "[]" }); source.close();
+    await upgradeLegacyToV2(paths, { legacyDbPath: legacy.dbPath, dryRun: false });
+    const target = new Database(paths.dbPath, { readonly: true });
+    const runs = target.prepare("SELECT run_id,ordinal FROM orchestration_v2_projection_runs ORDER BY ordinal").all();
+    expect(runs).toEqual([{ run_id: "migration:v1:run:t:earlier", ordinal: 1 }, { run_id: "migration:v1:run:t:turn", ordinal: 2 }]);
+    expect((target.prepare("SELECT COUNT(*) n FROM orchestration_v2_turn_item_positions").get() as { n: number }).n).toBe(8);
+    expect((target.prepare("SELECT COUNT(*) n FROM orchestration_v2_projection_turn_items").get() as { n: number }).n).toBe(8);
+    // Event replay must preserve uniqueness at every intermediate position,
+    // rather than relying on changes made only to the persisted read model.
+    for (const type of ["run.updated", "turn-item.updated"]) {
+      const positions = new Map<string, number>();
+      for (const event of target.prepare("SELECT payload_json FROM orchestration_events WHERE event_type=? ORDER BY sequence").all(type) as { payload_json: string }[]) {
+        const payload = JSON.parse(event.payload_json) as { id: string; ordinal: number };
+        for (const [id, ordinal] of positions) if (id !== payload.id) expect(ordinal).not.toBe(payload.ordinal);
+        positions.set(payload.id, payload.ordinal);
+      }
+      const table = type === "run.updated" ? "orchestration_v2_projection_runs" : "orchestration_v2_projection_turn_items";
+      const key = type === "run.updated" ? "run_id" : "turn_item_id";
+      const expected = target.prepare(`SELECT ${key} id,ordinal FROM ${table}`).all() as { id: string; ordinal: number }[];
+      expect(positions).toEqual(new Map(expected.map(row => [row.id, row.ordinal])));
+    }
+    target.close();
+    expect(await upgradeLegacyToV2(paths, { legacyDbPath: legacy.dbPath, dryRun: false })).toMatchObject({ events: 0, unchangedThreads: 1 });
+  });
+  it("preserves timeline order when recovered turns interleave older synthetic user timestamps", async () => {
+    const { legacy, paths } = fixture();
+    const source = new Database(legacy.dbPath);
+    const recoveredAt = "2026-01-01T00:00:00.500Z";
+    seed(source, "projection_thread_messages", { thread_id: "t", message_id: "recovered", turn_id: null, role: "user", text: "Recovered prompt", is_streaming: 0, created_at: recoveredAt, updated_at: recoveredAt, attachments_json: "[]" });
+    seed(source, "projection_turns", { thread_id: "t", turn_id: "recovered-turn", pending_message_id: "recovered", state: "completed", requested_at: recoveredAt, started_at: recoveredAt, completed_at: "2026-01-01T00:00:00.900Z", checkpoint_files_json: "[]" });
+    seed(source, "projection_thread_activities", { activity_id: "recovered-tool", thread_id: "t", turn_id: "recovered-turn", tone: "tool", kind: "tool.completed", summary: "Recovered tool", payload_json: "{}", created_at: "2026-01-01T00:00:00.750Z", sequence: 0 }); source.close();
+    await upgradeLegacyToV2(paths, { legacyDbPath: legacy.dbPath, dryRun: false });
+    const target = new Database(paths.dbPath, { readonly: true });
+    const activities = target.prepare("SELECT payload_json FROM orchestration_v2_projection_turn_items WHERE type='dynamic_tool' ORDER BY ordinal").all() as { payload_json: string }[];
+    expect(activities.map(row => JSON.parse(row.payload_json).input.legacyActivity.id)).toEqual(["recovered-tool", "tool-0", "tool-1", "tool-2", "tool-3"]);
+    target.close();
+  });
 });
