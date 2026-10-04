@@ -309,7 +309,10 @@ export function planThread(
 
     const timeline: Array<{ timestamp: string; sourceId: string; type: "message" | "activity" | "plan"; value: CanonicalMessage | CanonicalActivity | { sourceId: string; markdown: string; timestamp: string } }> = [
       ...turn.assistant.map((value) => ({ timestamp: value.timestamp, sourceId: value.sourceId, type: "message" as const, value })),
-      ...turn.activities.map((value) => ({ timestamp: value.timestamp, sourceId: value.sourceId, type: "activity" as const, value })),
+      ...turn.activities.map((value) => {
+        lastActivityTime = Math.max(new Date(value.timestamp).valueOf(), lastActivityTime + 1);
+        return { timestamp: new Date(lastActivityTime).toISOString(), sourceId: value.sourceId, type: "activity" as const, value };
+      }),
       ...turn.plans.map((value) => ({ timestamp: value.timestamp, sourceId: value.sourceId, type: "plan" as const, value })),
     ].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     timeline.forEach((entry, entryIndex) => {
@@ -324,10 +327,9 @@ export function planThread(
         // Native session sequence numbers restart on continuation. Historical
         // activity sorts before those live sequences, ordered by timestamp.
         // Keep source order when legacy producers tied or regressed timestamps.
-        lastActivityTime = Math.max(new Date(activity.timestamp).valueOf(), lastActivityTime + 1);
-        const createdAt = new Date(lastActivityTime).toISOString();
+        const createdAt = entry.timestamp;
         const activityId = deterministicUuid(`t3-import:activity:${seed}:${turn.id}:${activity.sourceId}`);
-        events.push(event(seed, `turn.${turnNumber}.entry.${entryIndex}.activity`, "thread", threadId, "thread.activity-appended", activity.timestamp, "provider", {
+        events.push(event(seed, `turn.${turnNumber}.entry.${entryIndex}.activity`, "thread", threadId, "thread.activity-appended", createdAt, "provider", {
           threadId,
           activity: { id: activityId, tone: activity.tone, kind: activity.kind, summary: activity.summary || "Activity", payload: activity.payload, turnId: turn.id, createdAt },
         }, { adapterKey: provider.adapterKey, providerTurnId: turn.id, providerItemId: activity.sourceId }));
