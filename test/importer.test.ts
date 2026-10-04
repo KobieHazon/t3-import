@@ -151,11 +151,13 @@ describe.each(SUPPORTED_MIGRATIONS)("migration-%i writer", (migration) => {
       activities: fixtureTurn.activities.map((activity) => ({ ...activity, sourceId: `${activity.sourceId}-${index}` })),
     }));
 
-    await expect(importConversations(
+    const result = importConversations(
       [{ conversation: canonicalConversation(workspace, thread), resume: true }],
       paths,
       { dryRun: true, resume: true },
-    )).rejects.toMatchObject({ exitCode: 4, message: expect.stringContaining("safe one-launch limit") });
+    );
+    if (fixtureMigration >= 54) expect((await result).results[0]!.events).toBeGreaterThan(900);
+    else await expect(result).rejects.toMatchObject({ exitCode: 4, message: expect.stringContaining("safe one-launch limit") });
     expect(eventCount(paths.dbPath)).toBe(0);
   });
 
