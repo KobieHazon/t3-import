@@ -109,6 +109,8 @@ function compactTurnActivities(activities: CanonicalActivity[]): CanonicalActivi
   const latestOtherByKind = new Map<string, number>();
 
   activities.forEach((activity, index) => {
+    // Even explicitly reduced history must retain every failure and approval.
+    if (activity.tone === "error" || activity.tone === "approval" || activity.payload.status === "failed") { selected.add(index); return; }
     if (activity.kind === "context-window.updated") return;
     if (activity.kind === "reasoning.summary") {
       latestReasoning = index;
@@ -125,11 +127,7 @@ function compactTurnActivities(activities: CanonicalActivity[]): CanonicalActivi
       ) representativeTool = index;
       return;
     }
-    if (
-      activity.kind === "context-compaction" ||
-      activity.tone === "error" ||
-      activity.tone === "approval"
-    ) {
+    if (activity.kind === "context-compaction") {
       selected.add(index);
       return;
     }
@@ -156,9 +154,18 @@ export function compactThreadForImport(thread: CanonicalThread): CanonicalThread
     turns,
     warnings: [
       ...thread.warnings,
-      `Compacted ${before} source activities to ${after} import activities for T3 startup compatibility.`,
+      `Compacted ${before} source activities to ${after} import activities by explicit request (--compact-activity).`,
     ],
   };
+}
+
+export function prepareThreadForImport(thread: CanonicalThread, compactActivity = false): CanonicalThread {
+  return compactActivity ? compactThreadForImport(thread) : thread;
+}
+
+/** Migration 54 bootstraps every event in bounded pages; older versions keep their guard. */
+export function exceedsProjectionBudget(migration: number, eventCount: number): boolean {
+  return migration < 54 && eventCount > MAX_SAFE_IMPORT_EVENTS;
 }
 
 export interface ImportOptions extends TargetOverrides {
@@ -440,7 +447,7 @@ export async function importConversations(
     const plannedProjectEvents = new Set<string>();
     for (const selection of selections) {
       for (const sourceThread of selection.conversation.threads) {
-        const thread = compactThreadForImport(sourceThread);
+        const thread = prepareThreadForImport(sourceThread, options.compactActivity);
         if (thread.turns.length === 0) throw writeError(`Conversation ${thread.sourceSessionId} has no terminal turns to import. Use --include-incomplete to import an active snapshot as interrupted history.`);
         const threadId = thread.source === "codex" && /^[0-9a-f-]{36}$/iu.test(thread.sourceSessionId)
           ? thread.sourceSessionId
@@ -492,10 +499,10 @@ export async function importConversations(
         );
       }
       const plannedEventCount = toWrite.reduce((sum, plan) => sum + plan.events.length, 0);
-      if (plannedEventCount > MAX_SAFE_IMPORT_EVENTS) {
+      if (exceedsProjectionBudget(schema.migration, plannedEventCount)) {
         throw safetyError(
-          `The compact import would append ${plannedEventCount} events, exceeding the safe one-launch limit of ${MAX_SAFE_IMPORT_EVENTS}. ` +
-          "Import fewer conversations at a time or select shorter histories.",
+          `The import would append ${plannedEventCount} events, exceeding the safe one-launch limit of ${MAX_SAFE_IMPORT_EVENTS} for this T3 version. ` +
+          "Import fewer conversations, upgrade T3, or explicitly choose --compact-activity to reduce history.",
         );
       }
     }
