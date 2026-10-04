@@ -397,7 +397,12 @@ function buildPlan(db: Database.Database, paths: TargetPaths, conversation: Cano
   }
   const provider = existingProvider(db, thread, record, events);
   const syncThread = { ...thread, turns: newTurns, warnings };
-  const planned = planThread(syncThread, record.threadId, record.projectId, paths, provider, record.identitySeed, undefined, record.resumable && Boolean(thread.resumeCursor), conversation.fingerprint, checkpoint.turns.length + adopted, false);
+  const previousActivityTime = events.reduce((latest, row) => {
+    if (row.type !== "thread.activity-appended" || !isObject(row.payload.activity)) return latest;
+    const time = new Date(stringValue(row.payload.activity.createdAt) ?? "").valueOf();
+    return Number.isFinite(time) ? Math.max(latest, time) : latest;
+  }, Number.NEGATIVE_INFINITY);
+  const planned = planThread(syncThread, record.threadId, record.projectId, paths, provider, record.identitySeed, undefined, record.resumable && Boolean(thread.resumeCursor), conversation.fingerprint, checkpoint.turns.length + adopted, false, {}, previousActivityTime);
   if (titleAction === "updated") {
     planned.events.push(event(
       record.identitySeed, `sync.title.${events.filter((row) => row.type === "thread.meta-updated").length}`, "thread", record.threadId,

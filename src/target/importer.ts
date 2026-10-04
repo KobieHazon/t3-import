@@ -261,6 +261,7 @@ export function planThread(
   turnOffset = 0,
   includeThreadCreated = true,
   threadCreatedMetadata: Record<string, unknown> = {},
+  previousActivityTime = Number.NEGATIVE_INFINITY,
 ): PlannedThread {
   const events: PlannedEvent[] = projectEvent ? [projectEvent] : [];
   const assets: PlannedAsset[] = [];
@@ -279,7 +280,7 @@ export function planThread(
     }, { adapterKey: provider.adapterKey }));
   }
 
-  let lastActivityTime = Number.NEGATIVE_INFINITY;
+  let lastActivityTime = previousActivityTime;
   thread.turns.forEach((turn, turnIndex) => {
     const turnNumber = turnOffset + turnIndex;
     const attachmentPlan = planMessageAttachments(turn.user, threadId, paths, warnings);

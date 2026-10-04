@@ -22,9 +22,14 @@ it("writes every distinct activity through import, incremental sync, and replace
   const caughtUp=()=>{const db=new Database(paths.dbPath);db.prepare("INSERT OR REPLACE INTO projection_state(projector,last_applied_sequence,updated_at) SELECT 'test',MAX(sequence),'2026-01-01T00:00:00Z' FROM orchestration_events").run();db.close();};
   const first=await importConversations([{conversation:canonicalConversation(workspace,thread),resume:true}],paths,{dryRun:false,resume:true});
   expect(count(first.results[0]!.threadId)).toBe(7);caughtUp();
-  const second=structuredClone(thread.turns[0]!);second.id="turn-2";second.user.sourceId="user-2";second.assistant[0]!.sourceId="answer-2";thread.turns.push(second);
+  const second=structuredClone(thread.turns[0]!);second.id="turn-2";second.user.sourceId="user-2";second.assistant[0]!.sourceId="answer-2";
+  second.activities=second.activities.map(a=>({...a,timestamp:"2025-01-01T00:00:00.000Z"}));thread.turns.push(second);
   expect((await syncConversations([{conversation:canonicalConversation(workspace,thread)}],paths,{dryRun:false})).hasConflicts).toBe(false);
   expect(count(first.results[0]!.threadId)).toBe(14);caughtUp();
+  const db=new Database(paths.dbPath);
+  const ordered=db.prepare("SELECT payload_json,metadata_json FROM orchestration_events WHERE stream_id=? AND event_type='thread.activity-appended' ORDER BY json_extract(payload_json,'$.activity.createdAt'),json_extract(payload_json,'$.activity.id')").all(first.results[0]!.threadId) as Array<{payload_json:string;metadata_json:string}>;
+  db.close();
+  expect(ordered.map(r=>JSON.parse(r.metadata_json).providerTurnId+":"+JSON.parse(r.metadata_json).providerItemId)).toEqual(thread.turns.flatMap(t=>t.activities.map(a=>t.id+":"+a.sourceId)));
   thread.turns[0]!.user.text="Edited prompt";
   const replacement=await replaceConversations([{conversation:canonicalConversation(workspace,thread)}],paths,{dryRun:false});
   expect(replacement.status).toBe("replaced");
