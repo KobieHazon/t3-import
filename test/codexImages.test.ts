@@ -6,6 +6,8 @@ import { afterAll, afterEach, expect, it } from "vitest";
 import { normalizeCodexHistory } from "../src/sources/codexHistory.js";
 import { recoverCodexImages } from "../src/sources/codexImages.js";
 import type { SourceSummary } from "../src/core/types.js";
+import { canonicalConversation, createTarget } from "./helpers.js";
+import { importConversations } from "../src/target/importer.js";
 
 const root = mkdtempSync(join(tmpdir(), "codex-images-"));
 afterAll(() => rmSync(root, {recursive:true,force:true}));
@@ -56,4 +58,14 @@ it("keeps missing-image warnings when only a basename matches or the archive is 
   archive([{type:"response_item",payload:message(join(root,"elsewhere","photo.png"))}]);
   expect((await recoverCodexImages(path,"chat",new Set([missing]))).size).toBe(0);
   expect((await recoverCodexImages(join(root,"absent.jsonl"),"chat",new Set([missing]))).size).toBe(0);
+});
+
+it("retains all recovered images when merged user input contains more than eight",async()=>{
+  const paths=Array.from({length:9},(_,i)=>join(root,"deleted",`photo-${i}.png`));
+  archive(paths.map(p=>({type:"response_item",payload:message(p)})));
+  const thread=await normalizeCodexHistory({turns:[{id:"turn",status:"completed",items:[{type:"userMessage",id:"user",content:paths.map(path=>({type:"localImage",path}))}]}]},summary);
+  expect(thread.turns[0]!.user.attachments).toHaveLength(9);
+  const target=createTarget(join(root,"target"));
+  const result=await importConversations([{conversation:canonicalConversation("/workspace",thread),resume:true}],target,{dryRun:true,resume:true});
+  expect(result.results[0]!.attachments).toBe(9);
 });
