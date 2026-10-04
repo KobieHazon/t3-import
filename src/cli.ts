@@ -23,8 +23,8 @@ const program = new Command();
 
 function collect(value: string, previous: string[]): string[] { return [...previous, value]; }
 function globalOverrides(): TargetOverrides {
-  const values = program.opts<{ t3Home?: string; db?: string; attachmentsDir?: string; providerInstance?: string }>();
-  return { ...(values.t3Home ? { t3Home: values.t3Home } : {}), ...(values.db ? { dbPath: values.db } : {}), ...(values.attachmentsDir ? { attachmentsDir: values.attachmentsDir } : {}), ...(values.providerInstance ? { providerInstance: values.providerInstance } : {}) };
+  const values = program.opts<{ t3Home?: string; db?: string; attachmentsDir?: string; providerInstance?: string; compactActivity?: boolean }>();
+  return { ...(values.t3Home ? { t3Home: values.t3Home } : {}), ...(values.db ? { dbPath: values.db } : {}), ...(values.attachmentsDir ? { attachmentsDir: values.attachmentsDir } : {}), ...(values.providerInstance ? { providerInstance: values.providerInstance } : {}), compactActivity: Boolean(values.compactActivity) };
 }
 function includeSubagents(): boolean { return Boolean(program.opts<{ includeSubagents?: boolean }>().includeSubagents); }
 function isJson(): boolean { return Boolean(program.opts<{ json?: boolean }>().json); }
@@ -92,7 +92,7 @@ program
   .action(async () => {
     const paths = resolveTargetPaths(globalOverrides());
     const provider = globalOverrides().providerInstance;
-    const instance = render(React.createElement(ImportTui, { includeSubagents: includeSubagents(), paths, resetCache: shouldResetCache(), ...(provider ? { initialProvider: provider } : {}) }));
+    const instance = render(React.createElement(ImportTui, { includeSubagents: includeSubagents(), paths, resetCache: shouldResetCache(), compactActivity: Boolean(globalOverrides().compactActivity), ...(provider ? { initialProvider: provider } : {}) }));
     await instance.waitUntilExit();
   });
 
@@ -181,7 +181,7 @@ program.command("import")
           ...(source ? { initialSource: source } : {}),
           ...(options.workspace ? { initialWorkspace: options.workspace } : {}),
           ...(provider ? { initialProvider: provider } : {}),
-          resetCache: shouldResetCache(),
+          resetCache: shouldResetCache(), compactActivity: Boolean(globalOverrides().compactActivity),
         }));
         await instance.waitUntilExit();
         return;
@@ -226,7 +226,7 @@ program.command("replace")
           paths, mode: "replace",
           ...(source ? { initialSource: source } : {}),
           ...(options.workspace ? { initialWorkspace: options.workspace } : {}),
-          resetCache: shouldResetCache(),
+          resetCache: shouldResetCache(), compactActivity: Boolean(globalOverrides().compactActivity),
         }));
         await instance.waitUntilExit();
         return;
@@ -272,7 +272,7 @@ program.command("sync")
           ...(source ? { initialSource: source } : {}),
           ...(options.workspace ? { initialWorkspace: options.workspace } : {}),
           ...(provider ? { initialProvider: provider } : {}),
-          resetCache: shouldResetCache(),
+          resetCache: shouldResetCache(), compactActivity: Boolean(globalOverrides().compactActivity),
         }));
         await instance.waitUntilExit();
         return;
@@ -298,7 +298,7 @@ program.command("sync")
     const paths = resolveTargetPaths(globalOverrides());
     const loaded = await Promise.all(selected.map(async (summary) => ({ conversation: await adapter.load(summary, { workspace: options.workspace! }) })));
     const eligible = options.all
-      ? (await Promise.all(loaded.map(async (selection) => ({ selection, preview: await inspectConversationSync(selection.conversation, paths) })))).filter((item) => item.preview.previouslyImported).map((item) => item.selection)
+      ? (await Promise.all(loaded.map(async (selection) => ({ selection, preview: await inspectConversationSync(selection.conversation, paths, globalOverrides()) })))).filter((item) => item.preview.previouslyImported).map((item) => item.selection)
       : loaded;
     const result = await syncConversations(eligible, paths, { ...globalOverrides(), dryRun: Boolean(options.dryRun) });
     await attachCacheReset(result, paths, result.results.some((item) => item.status === "synced"));
