@@ -74,6 +74,19 @@ export function legacyActivityItem(row: Row, base: Payload): Payload {
   };
 }
 
+/** Saved native bindings already own their historical inputs, including failed turns. */
+export function nativeHistoryCoverage(input: { threadId: string; nativeId: string; providerThreadId: string; lastRunId: string; runCount: number; itemIds: string[]; createdAt: string; updatedAt: string }): Payload {
+  return {
+    id: `${PREFIX}:native-history:${input.threadId}:${encodeURIComponent(input.nativeId)}`,
+    threadId: input.threadId, targetRunId: input.lastRunId,
+    fromProviderThreadIds: [input.providerThreadId], toProviderThreadId: input.providerThreadId,
+    coveredRunOrdinals: { from: 1, to: input.runCount }, strategy: "full_thread_summary", status: "ready",
+    summaryMessageId: null, summaryText: "Legacy records belong to the existing saved native conversation; this records historical coverage, not a new T3 execution or history injection.",
+    delivery: { nativeThreadId: input.nativeId, status: "inline", itemIds: input.itemIds },
+    createdByProviderInstanceId: null, createdAt: input.createdAt, updatedAt: input.updatedAt,
+  };
+}
+
 /**
  * Offline, additive bridge into the official V2 event log and its persisted read models.
  * V2 does not replay an offline event backlog on startup, so both are committed together.
@@ -122,6 +135,7 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
           upsert("orchestration_v2_projection_turn_items", "turn_item_id", { turn_item_id: p.id, thread_id: p.threadId, run_id: p.runId, node_id: p.nodeId, provider_thread_id: p.providerThreadId, provider_turn_id: p.providerTurnId, parent_item_id: p.parentItemId, ordinal: p.ordinal, type: p.type, status: p.status, updated_at: p.updatedAt, payload_json: json });
           target.prepare("INSERT INTO orchestration_v2_turn_item_positions VALUES (?,?,?) ON CONFLICT(thread_id,turn_item_id) DO UPDATE SET ordinal=excluded.ordinal").run(p.threadId, p.id, p.ordinal); break;
         case "plan.updated": upsert("orchestration_v2_projection_plans", "plan_id", { plan_id: p.id, thread_id: p.threadId, run_id: p.runId, node_id: p.nodeId, kind: p.kind, status: p.status, payload_json: json }); break;
+        case "context-handoff.updated": upsert("orchestration_v2_projection_context_handoffs", "context_handoff_id", { context_handoff_id: p.id, thread_id: p.threadId, target_run_id: p.targetRunId, to_provider_thread_id: p.toProviderThreadId, strategy: p.strategy, status: p.status, updated_at: p.updatedAt, payload_json: json }); break;
       }
     };
     const append = (threadId: string, type: string, at: string, payload: Payload, aggregate = "thread"): void => {
@@ -237,6 +251,7 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
       timeline.sort((a, b) => a.row.created_at.localeCompare(b.row.created_at) || (a.kind === "message" && a.row.role === "user" ? -1 : b.kind === "message" && b.row.role === "user" ? 1 : 0));
       const ordinals = new Map<string, number>();
       let previousOrdinal = 0;
+      const historicalItemIds: string[] = [];
       for (const item of timeline) {
         const itemRow = item.row;
         const runKey = item.run?.id ?? "unassigned";
@@ -247,6 +262,7 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
         const ordinal = Math.max(previousOrdinal + 1, (item.run?.ordinal ?? 0) * 1_000_000 + inRun);
         previousOrdinal = ordinal;
         const itemId = item.kind === "message" ? `migration:v1:turn-item:${itemRow.message_id}` : `${PREFIX}:${item.kind}:${itemRow.activity_id ?? itemRow.plan_id}`;
+        historicalItemIds.push(itemId);
         const base = { id: itemId, threadId: row.thread_id, runId: item.run?.id ?? null, nodeId: null,
           providerThreadId, providerTurnId: null, nativeItemRef: null, parentItemId: null, ordinal,
           status: "completed", title: null, startedAt: itemRow.created_at, completedAt: itemRow.updated_at ?? itemRow.created_at,
@@ -283,6 +299,13 @@ export async function upgradeLegacyToV2(paths: TargetPaths, options: UpgradeV2Op
           payload = { ...base, nodeId, type: "proposed_plan", planId: itemRow.plan_id, markdown: itemRow.plan_markdown, streaming: false }; result.plans++;
         }
         append(row.thread_id, "turn-item.updated", base.updatedAt, payload);
+      }
+      if (providerThreadId && typeof nativeId === "string" && runOrdinal > 0) {
+        const last = [...runsByUser.values()].at(-1)!;
+        append(row.thread_id, "context-handoff.updated", row.updated_at, nativeHistoryCoverage({
+          threadId: row.thread_id, nativeId, providerThreadId, lastRunId: last.id,
+          runCount: runOrdinal, itemIds: historicalItemIds, createdAt: row.created_at, updatedAt: row.updated_at,
+        }));
       }
       // Native reducers advance thread.updatedAt for each content event. Restore
       // authoritative legacy metadata last so a rebuild matches the saved view.

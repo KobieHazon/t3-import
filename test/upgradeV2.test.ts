@@ -159,4 +159,22 @@ describe("native V2 legacy bridge", () => {
     expect(activities.map(row => JSON.parse(row.payload_json).input.legacyActivity.id)).toEqual(["recovered-tool", "tool-0", "tool-1", "tool-2", "tool-3"]);
     target.close();
   });
+  it("records existing native coverage without replaying historical failed or interrupted prompts", async () => {
+    for (const state of ["error", "interrupted"]) {
+      const { legacy, paths } = fixture();
+      const source = new Database(legacy.dbPath); source.prepare("UPDATE projection_turns SET state=?").run(state); source.close();
+      await upgradeLegacyToV2(paths, { legacyDbPath: legacy.dbPath, dryRun: false });
+      const target = new Database(paths.dbPath, { readonly: true });
+      const run = target.prepare("SELECT status FROM orchestration_v2_projection_runs").get() as { status: string };
+      expect(run.status).toBe(state === "error" ? "failed" : "interrupted");
+      const handoff = JSON.parse((target.prepare("SELECT payload_json FROM orchestration_v2_projection_context_handoffs").get() as { payload_json: string }).payload_json);
+      expect(handoff.delivery.nativeThreadId).toBe("11111111-1111-4111-8111-111111111111");
+      expect(handoff.delivery.status).toBe("inline");
+      const covered = new Set(handoff.delivery.itemIds);
+      const historical = target.prepare("SELECT turn_item_id FROM orchestration_v2_projection_turn_items").all() as { turn_item_id: string }[];
+      expect(historical.every(row => covered.has(row.turn_item_id))).toBe(true);
+      expect((target.prepare("SELECT COUNT(*) n FROM orchestration_v2_projection_run_attempts").get() as { n: number }).n).toBe(0);
+      target.close();
+    }
+  });
 });
