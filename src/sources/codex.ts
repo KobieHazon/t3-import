@@ -424,7 +424,7 @@ function parseRows(
     const user = orderedMessage({
       ...first,
       text: [first.text, ...rest.map((entry) => entry.text)].filter(Boolean).join("\n\n"),
-      attachments: turn.users.flatMap((entry) => entry.attachments).slice(0, 8),
+      attachments: turn.users.flatMap((entry) => entry.attachments),
     });
     const assistant = turn.assistant.map(orderedMessage);
     return [{ id: turn.id, startedAt: turn.startedAt, ...(turn.completedAt ? { completedAt: turn.completedAt } : {}), status: turn.status, ...(turn.terminalReason ? { terminalReason: turn.terminalReason } : {}), ...(turn.terminalError ? { terminalError: turn.terminalError } : {}), user, assistant, activities: turn.activities, plans: turn.plans }];
