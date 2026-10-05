@@ -18,6 +18,8 @@ import { inspectConversationSync, syncConversations } from "./target/sync.js";
 import { replaceConversations } from "./target/replace.js";
 import { discoverT3CacheProfiles, formatCacheResetResult, resetT3RebuildableCache } from "./target/cache.js";
 import { upgradeLegacyToV2 } from "./target/upgradeV2.js";
+import { regroupV2Projects } from "./target/regroupV2.js";
+import { readCodexProjects } from "./sources/codexProjects.js";
 import { join } from "node:path";
 
 const sourceSchema = z.enum(["codex", "claude"]);
@@ -138,6 +140,20 @@ program.command("upgrade-v2")
     const defaultPaths = resolveTargetPaths(overrides);
     const paths = resolveTargetPaths({ ...overrides, dbPath: overrides.dbPath ?? join(defaultPaths.stateDir, "statev2.sqlite") });
     print(await upgradeLegacyToV2(paths, { dryRun: Boolean(options.dryRun), ...(options.legacyDb ? { legacyDbPath: options.legacyDb } : {}), ...(options.thread.length ? { threadIds: options.thread } : {}) }));
+  });
+
+program.command("regroup-projects")
+  .description("Group native V2 Codex chats by saved desktop projects, preserving their working directories")
+  .option("--codex-home <path>", "original Codex desktop metadata home")
+  .requiredOption("--unassigned-workspace <path>", "workspace for the Other chats group")
+  .option("--include-native", "also group Codex chats created natively in this T3 home")
+  .option("--dry-run", "preview without writes")
+  .option("--yes", "apply the backed-up offline regrouping")
+  .action(async (options: { codexHome?: string; unassignedWorkspace: string; includeNative?: boolean; dryRun?: boolean; yes?: boolean }) => {
+    if (!options.dryRun && !options.yes) throw usageError("Regrouping requires --yes. Preview first with --dry-run.");
+    const overrides = globalOverrides(), defaults = resolveTargetPaths(overrides);
+    const paths = resolveTargetPaths({ ...overrides, dbPath: overrides.dbPath ?? join(defaults.stateDir, "statev2.sqlite") });
+    print(await regroupV2Projects(paths, readCodexProjects(options.codexHome), { dryRun: Boolean(options.dryRun), unassignedWorkspace: options.unassignedWorkspace, includeNative: Boolean(options.includeNative) }));
   });
 
 program.command("doctor")
