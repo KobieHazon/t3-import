@@ -122,6 +122,19 @@ The bridge preserves full activity payloads, failed tools, plans, message attach
 
 Ordinary V1 import/sync commands reject a retired `state.sqlite` beside `statev2.sqlite`. They must operate in a separate V1 staging home before the explicit bridge. Do not write new imports into the nightly's inactive legacy database.
 
+### Saved Codex project grouping
+
+Ordinary imports group chats by execution folder. This can produce many sidebar projects when Codex uses per-chat scratch folders or Git worktrees. After the migration-56 V2 bridge, close T3 and preview a separate metadata correction using the original Codex desktop home:
+
+```text
+t3-import --t3-home /path/to/copied-t3-home regroup-projects --codex-home /path/to/original-codex-home --unassigned-workspace /path/to/general-chats --dry-run
+t3-import --t3-home /path/to/copied-t3-home regroup-projects --codex-home /path/to/original-codex-home --unassigned-workspace /path/to/general-chats --yes
+```
+
+The command reads `.codex-global-state.json`. Explicit project assignments take precedence, followed by explicit projectless membership, saved workspace hints, containing saved roots and shared Git repository metadata. Projectless or unmatched chats go into **Other chats**. Ambiguous or unsupported assignments stop the correction. Saved project names and local roots are retained; a ChatGPT project's local proxy groups its readable imported chats without transferring cloud files or Pages.
+
+Only imported Codex chats are regrouped by default. `--include-native` also selects Codex chats with native session bindings created in this T3 home. Unrelated projects and unbound drafts remain separate. Every selected chat retains its effective working directory, immutable history, native provider identity and timestamps. Bound schedules follow their chat's project without changing their prompt, timing or enabled state. Empty headers are retired only if chats moved out of them or the importer's exact project and creation-event identities prove ownership. The command backs up the native database, commits canonical metadata events and matching projections together, and is idempotent. It supports only migration 56 and refuses active native runs or a running T3 target.
+
 - Close T3 before every real import. There is deliberately no force bypass.
 - Every write creates and verifies a timestamped SQLite backup under `<state-dir>/t3-import-backups/`.
 - Successful imports, syncs, and replacements reset T3's rebuildable IndexedDB origin cache by default. The cache is moved aside, copied and verified under the same backup directory before removal; use `--no-cache-reset` to opt out.
