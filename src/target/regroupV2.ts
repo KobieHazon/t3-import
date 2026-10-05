@@ -101,7 +101,7 @@ export async function regroupV2Projects(paths: TargetPaths, catalog: CodexProjec
         if (!options.dryRun) db.prepare("UPDATE projection_projects SET title=?,updated_at=? WHERE project_id=?").run(project.title, now, project.projectId);
       } else {
         append("project", project.projectId, "project.created", { projectId: project.projectId, title: project.title, workspaceRoot: project.workspace, defaultModelSelection: null, scripts: [], createdAt: now, updatedAt: now });
-        if (!options.dryRun) db.prepare("INSERT INTO projection_projects (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at,deleted_at) VALUES (?,?,?,'null','[]',?,?,NULL)").run(project.projectId, project.title, project.workspace, now, now);
+        if (!options.dryRun) db.prepare("INSERT INTO projection_projects (project_id,title,workspace_root,default_model_selection_json,scripts_json,created_at,updated_at,deleted_at) VALUES (?,?,?,NULL,'[]',?,?,NULL)").run(project.projectId, project.title, project.workspace, now, now);
       }
     }
     for (const move of moves) {
